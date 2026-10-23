@@ -1,0 +1,278 @@
+{
+  "name": "Send Approved Outreach Emails from Google Sheet (30/day, 10 min apart)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "*/10 9-13 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "560bdec8-62bd-4065-8206-21414784a7c2",
+      "name": "Every 10 Minutes, Weekdays 9 to 1:50 PM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [0, 128]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "cfg-limit", "name": "dailyLimit", "value": 30, "type": "number" },
+            { "id": "cfg-from", "name": "fromEmail", "value": "sender@example.com", "type": "string" },
+            { "id": "cfg-name", "name": "senderName", "value": "SENDER_NAME", "type": "string" },
+            { "id": "cfg-address", "name": "physicalAddress", "value": "YOUR_MAILING_ADDRESS", "type": "string" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "806700f6-e026-488d-add5-c2b1673ab3bf",
+      "name": "Sender Settings",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [224, 128]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 1 },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.physicalAddress }}",
+              "operator": { "type": "string", "operation": "notEmpty" },
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c02f024f-632c-4f2a-a831-8cbad367509a",
+      "name": "Mailing Address Filled In?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [448, 128]
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "dataTableId": { "__rl": true, "mode": "id", "value": "YOUR_DATA_TABLE_ID" },
+        "matchType": "allConditions",
+        "filters": { "conditions": [{ "keyName": "status", "keyValue": "sent" }] },
+        "returnAll": true
+      },
+      "id": "eefb0a50-1a1a-4ace-8a4a-44c1c94707ad",
+      "name": "Get Already Sent Rows",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [672, 128],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const today = $now.toFormat('yyyy-MM-dd');\nconst ids = [];\nlet sentToday = 0;\nfor (const it of $input.all()) {\n  const j = it.json;\n  if (j.osm_id) {\n    ids.push(j.osm_id);\n    if (j.sent_date === today) sentToday++;\n  }\n}\nconst limit = $('Sender Settings').first().json.dailyLimit;\nreturn [{ json: { sentToday: sentToday, sentIds: ids, canSend: sentToday < limit } }];"
+      },
+      "id": "ff55c4b1-5850-4ef5-9df2-6fb842756588",
+      "name": "Count Sent Today",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [896, 128]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 1 },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.canSend }}",
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true },
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "744c399a-44bd-4ffb-829e-5fe3943d0d9f",
+      "name": "Under Daily Limit?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1120, 128]
+    },
+    {
+      "parameters": {
+        "documentId": { "__rl": true, "mode": "id", "value": "YOUR_GOOGLE_SHEET_ID" },
+        "sheetName": { "__rl": true, "mode": "name", "value": "Leads" },
+        "filtersUI": {
+          "values": [
+            { "lookupColumn": "approved", "lookupValue": "yes" },
+            { "lookupColumn": "status", "lookupValue": "drafted" }
+          ]
+        },
+        "options": { "returnFirstMatch": true }
+      },
+      "id": "8d7f85bc-a594-4672-98d4-be8b9b33b584",
+      "name": "Find Next Approved Lead",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [1344, 128]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const s = $('Sender Settings').first().json;\nconst c = $('Count Sent Today').first().json;\nconst r = $json;\nconst NL = String.fromCharCode(10);\nconst to = String(r.email || '').trim();\nlet reason = '';\nif (!/^[^ @]+@[^ @]+[.][^ @]+$/.test(to)) reason = 'bad_email';\nelse if (!r.email_subject || String(r.email_draft || '').length < 100) reason = 'missing_draft';\nelse if (c.sentIds.indexOf(r.osm_id) > -1) reason = 'already_sent';\nlet text = String(r.email_draft || '');\ntext = text + NL + NL + s.physicalAddress;\nfunction esc(x) { return x.split('&').join('&amp;').split('<').join('&lt;').split('>').join('&gt;'); }\nconst parts = text.split(NL + NL);\nlet html = '<div style=\"font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#222;\">';\nfor (const p of parts) { html += '<p style=\"margin:0 0 14px 0;\">' + esc(p.trim()).split(NL).join('<br>') + '</p>'; }\nhtml += '</div>';\nreturn { json: { osm_id: r.osm_id, business_name: r.business_name, to: to, subject: r.email_subject, message: text, html: html, valid: reason === '', reason: reason } };"
+      },
+      "id": "a5f2cdaf-ee39-4f56-b0ed-336108d0933a",
+      "name": "Prepare Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1568, 128]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 1 },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.valid }}",
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true },
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "879dcf49-f8e9-4c81-8438-6a68bdb20a88",
+      "name": "Safe to Send?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1792, 128]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "message": "={{ $json.html }}",
+        "options": { "appendAttribution": false, "senderName": "={{ $('Sender Settings').first().json.senderName }}" }
+      },
+      "id": "41c9a0bb-0175-4fda-a73f-b3e4ae924046",
+      "name": "Send Email (Gmail)",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [2016, 48],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "dataTableId": { "__rl": true, "mode": "id", "value": "YOUR_DATA_TABLE_ID" },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            { "keyName": "osm_id", "keyValue": "={{ $(\"Prepare Email\").item.json.osm_id }}" }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": { "status": "sent", "sent_date": "={{ $now.toFormat(\"yyyy-MM-dd\") }}" },
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "824c640e-517d-45fb-8e4b-c0feb8de93bc",
+      "name": "Mark Sent in Data Table",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [2240, 0]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": { "__rl": true, "mode": "id", "value": "YOUR_GOOGLE_SHEET_ID" },
+        "sheetName": { "__rl": true, "mode": "name", "value": "Leads" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": ["osm_id"],
+          "value": { "osm_id": "={{ $(\"Prepare Email\").item.json.osm_id }}", "status": "sent" },
+          "schema": [
+            { "id": "osm_id", "displayName": "osm_id", "required": false, "defaultMatch": true, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "status", "displayName": "status", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ca47544a-02b8-4640-a871-087fe6368ac3",
+      "name": "Mark Sent in Google Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [2464, 0]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": { "__rl": true, "mode": "id", "value": "YOUR_GOOGLE_SHEET_ID" },
+        "sheetName": { "__rl": true, "mode": "name", "value": "Leads" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": ["osm_id"],
+          "value": { "osm_id": "={{ $(\"Prepare Email\").item.json.osm_id }}", "status": "={{ 'not_sent_' + $('Prepare Email').item.json.reason }}" },
+          "schema": [
+            { "id": "osm_id", "displayName": "osm_id", "required": false, "defaultMatch": true, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "status", "displayName": "status", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true }
+          ]
+        },
+        "options": {}
+      },
+      "id": "9058fc0e-47e6-4bd0-bb74-9faee98467f7",
+      "name": "Mark Not Sent in Google Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [2240, 224]
+    },
+    {
+      "parameters": {
+        "content": "## Before activating\n1. Attach your own Gmail and Google Sheets credentials (credentials are NOT included in this export).\n2. Fill in Sender Settings: sender email, name and a mailing address (nothing sends while the address is empty).\n3. In the Leads sheet, type yes in the approved column only for drafts you have read.\n4. Test with ONE approved row first.\nLimits: 30 per day, one email every 10 minutes, weekdays 9:00 to 13:50.",
+        "height": 224,
+        "width": 384,
+        "color": 4
+      },
+      "id": "3b705dd4-6c9b-48a1-9867-2ce4962ff55e",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [192, 32]
+    }
+  ],
+  "connections": {
+    "Every 10 Minutes, Weekdays 9 to 1:50 PM": { "main": [[{ "node": "Sender Settings", "type": "main", "index": 0 }]] },
+    "Sender Settings": { "main": [[{ "node": "Mailing Address Filled In?", "type": "main", "index": 0 }]] },
+    "Mailing Address Filled In?": { "main": [[{ "node": "Get Already Sent Rows", "type": "main", "index": 0 }]] },
+    "Get Already Sent Rows": { "main": [[{ "node": "Count Sent Today", "type": "main", "index": 0 }]] },
+    "Count Sent Today": { "main": [[{ "node": "Under Daily Limit?", "type": "main", "index": 0 }]] },
+    "Under Daily Limit?": { "main": [[{ "node": "Find Next Approved Lead", "type": "main", "index": 0 }]] },
+    "Find Next Approved Lead": { "main": [[{ "node": "Prepare Email", "type": "main", "index": 0 }]] },
+    "Prepare Email": { "main": [[{ "node": "Safe to Send?", "type": "main", "index": 0 }]] },
+    "Safe to Send?": {
+      "main": [
+        [{ "node": "Send Email (Gmail)", "type": "main", "index": 0 }],
+        [{ "node": "Mark Not Sent in Google Sheet", "type": "main", "index": 0 }]
+      ]
+    },
+    "Send Email (Gmail)": {
+      "main": [
+        [{ "node": "Mark Sent in Data Table", "type": "main", "index": 0 }],
+        [{ "node": "Mark Not Sent in Google Sheet", "type": "main", "index": 0 }]
+      ]
+    },
+    "Mark Sent in Data Table": { "main": [[{ "node": "Mark Sent in Google Sheet", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}
